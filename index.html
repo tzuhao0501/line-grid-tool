@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<title>LINE 六格套圖套標</title>
+<title>LINE 推播套圖套標</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&display=swap" rel="stylesheet">
@@ -47,6 +47,8 @@ button:disabled{cursor:not-allowed;opacity:.55}
 .btn.primary:disabled{background:var(--line);border-color:var(--line);color:var(--muted);opacity:1}
 .btn.small{padding:5px 10px;font-size:13px}
 .btn.warn{color:var(--bad);border-color:var(--bad)}
+.gridseg{background:var(--panel)}
+.gridseg button{padding:6px 12px;font-size:14px}
 .dirty{font-size:12px;color:var(--muted);white-space:nowrap}
 .dirty.on{color:var(--accent-ink);font-weight:700}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .dirty.on{color:#FFB37A}}
@@ -132,7 +134,7 @@ dialog#hist::backdrop{background:rgba(20,20,24,.45)}
 .hgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px;padding:14px 18px 20px}
 .work{border:1.5px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;background:var(--field)}
 .work.cur{border-color:var(--accent);border-width:2.5px}
-.work img{display:block;width:100%;aspect-ratio:1040/1470;object-fit:cover;background:#ddd}
+.work img{display:block;width:100%;aspect-ratio:1040/1470;object-fit:contain;background:var(--line)}
 .work .meta{padding:8px 10px 4px;font-size:13px;line-height:1.45}
 .work .meta strong{display:block;font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .work .meta span{color:var(--muted)}
@@ -158,7 +160,10 @@ dialog#hist::backdrop{background:rgba(20,20,24,.45)}
 </head>
 <body>
 <header class="top">
-  <h1>LINE 六格套圖套標</h1>
+  <h1 id="appTitle">LINE 六格套圖套標</h1>
+  <div class="seg gridseg" id="gridSeg" role="group" aria-label="版型">
+    <button type="button" data-g="6" aria-pressed="true">6 格</button><button type="button" data-g="5" aria-pressed="false">5 格</button><button type="button" data-g="4" aria-pressed="false">4 格</button><button type="button" data-g="3" aria-pressed="false">3 格</button>
+  </div>
   <span class="mode" id="mode">連線中…</span>
   <span class="dirty" id="dirty" aria-live="polite"></span>
   <button class="btn" id="btnImp">批次匯入</button>
@@ -184,7 +189,7 @@ dialog#hist::backdrop{background:rgba(20,20,24,.45)}
 <dialog id="imp" aria-labelledby="impTitle">
   <div class="hhead"><h2 id="impTitle">批次匯入標題與主圖</h2><button class="btn small" id="btnImpClose">取消</button></div>
   <div class="imp-body">
-    <p>一行一格，依序填入第 1～6 格。格式：<code>主標｜副標｜主圖網址</code>，主圖網址可以留空。直接貼上 Claude 整理好的那段文字即可。</p>
+    <p>一行一格，依序填入第 1～<span id="impN">6</span> 格；貼 3～6 行會自動切換成對應的 3～6 格版型。格式：<code>主標｜副標｜主圖網址</code>，主圖網址可以留空。直接貼上 Claude 整理好的那段文字即可。</p>
     <textarea id="impText" spellcheck="false" placeholder="漢來五星水餃｜萬家福開賣現省10元｜https://...jpg"></textarea>
     <ul id="impPrev"></ul>
     <p>匯入會開一張新的；目前畫面上的內容會先存到作品紀錄。</p>
@@ -211,14 +216,21 @@ dialog#hist::backdrop{background:rgba(20,20,24,.45)}
 <div class="toast" id="toast" role="status"></div>
 
 <script>const DEFAULT_TEMPLATE="";</script>
+<script>const DEFAULT_TEMPLATES={};/* 不內建任何範本：每個版型都要先上傳空白範本 */</script>
 <script>
 (()=>{
-const LIMIT_T=8, LIMIT_S=10, MAX_BYTES=1000000, MAX_SIDE=1800, LOCAL_KEEP=30;
+const LIMIT_T=8, LIMIT_T_BIG=16, LIMIT_S=10, MAX_BYTES=1000000, MAX_SIDE=1800, LOCAL_KEEP=30;
 const $=s=>document.querySelector(s);
 const canvas=$('#stage'), ctx=canvas.getContext('2d');
 let tplImg=null, tplSrc=DEFAULT_TEMPLATE, customTpl=false, cells=[];
 let slots=[]; let sel={slot:0,sub:0}; let pickTarget=null; let drag=null;
 let dirty=false, curWork=null;
+/* 版型：6 / 5 / 4 / 3 格，各自記住自己的範本底圖（6 格沿用舊的 tpl 位置） */
+const GRIDS=[6,5,4,3], GRID_NAME={6:'六格',5:'五格',4:'四格',3:'三格'}, GRID_H={6:1470,5:1490,4:1040,3:1040};
+let grid=6; const savedTpls={};
+const tplKey=g=>g===6?'tpl':'tpl'+g;
+const defTpl=g=>(typeof DEFAULT_TEMPLATES==='object'&&DEFAULT_TEMPLATES[g])||'';
+const hasTpl=g=>!!(savedTpls[g]||defTpl(g));
 const HAS_DEFAULT=!!DEFAULT_TEMPLATE;
 const needTpl=()=>{if(tplImg)return false;toast('請先按左下「換範本底圖」上傳空白範本');return true;};   // curWork: {id, where:'cloud'|'local', createdAt, by}
 const imgCache=new Map();
@@ -245,7 +257,7 @@ const DB={db:null,
   del(k){try{this.db&&this.db.transaction('kv','readwrite').objectStore('kv').delete(k);}catch(e){}}
 };
 const snapSlots=()=>slots.map(s=>({layout:s.layout,title:s.title,sub:s.sub,imgUrl:s.imgUrl||'',pics:s.pics.map(p=>p?{src:p.src,zoom:p.zoom,ox:p.ox,oy:p.oy}:null)}));
-let saveT; function persist(){clearTimeout(saveT);saveT=setTimeout(()=>{DB.set('state',{slots:snapSlots(),dirty,curWork});},400);}
+let saveT; function persist(){clearTimeout(saveT);saveT=setTimeout(()=>{DB.set('state',{grid,slots:snapSlots(),dirty,curWork});},400);}
 function changed(){dirty=true;updDirty();persist();}
 function hasContent(){return slots.some(s=>s.title.trim()||s.sub.trim()||s.pics.some(Boolean));}
 function updDirty(){const d=$('#dirty');
@@ -352,6 +364,28 @@ async function applyTemplate(src,isCustom){
   sel.slot=clamp(sel.slot,0,cells.length-1);
   return found.length;
 }
+function updGridUI(){
+  document.querySelectorAll('#gridSeg button').forEach(b=>b.setAttribute('aria-pressed',String(+b.dataset.g===grid)));
+  $('#appTitle').textContent=`LINE ${GRID_NAME[grid]}套圖套標`;
+  $('#btnTplReset').hidden=!defTpl(grid);
+  $('#impN').textContent=String(cells.length||grid);
+}
+/* 換到某個版型：用這個版型記住的範本，沒有就用內建範本 */
+async function useGrid(g){
+  grid=g;
+  const saved=savedTpls[g],d=defTpl(g);
+  let ok=false;
+  if(saved){try{await applyTemplate(saved,true);ok=true;}catch(e){delete savedTpls[g];DB.del(tplKey(g));}}
+  if(!ok&&d){try{await applyTemplate(d,false);ok=true;}catch(e){}}
+  if(!ok){tplImg=null;cells=[];customTpl=false;canvas.width=1040;canvas.height=GRID_H[g];
+    while(slots.length<g)slots.push(newSlot());if(slots.length>g)slots.length=g;sel={slot:0,sub:0};}
+  updGridUI();return ok;
+}
+/* 切換版型前：先把目前這張存起來，之後存檔會另開一筆紀錄 */
+async function leaveCurrentForGrid(){
+  if(!(await keepCurrent()))return false;
+  curWork=null;dirty=hasContent();return true;
+}
 
 /* ---------- 繪製 ---------- */
 function subRects(c,layout){
@@ -373,7 +407,7 @@ function render(x,forExport){
   const W=x.canvas.width,H=x.canvas.height;
   x.clearRect(0,0,W,H);
   if(!tplImg){if(!forExport){x.fillStyle='#EEF0F2';x.fillRect(0,0,W,H);x.fillStyle='#646A72';x.textAlign='center';x.textBaseline='middle';
-    x.font=`700 40px ${FONT}`;x.fillText('還沒有範本',W/2,H/2-40);x.font=`500 28px ${FONT}`;x.fillText('按左下「換範本底圖」上傳空白範本',W/2,H/2+20);x.fillText('上傳一次後就會記住',W/2,H/2+64);}return;}
+    x.font=`700 40px ${FONT}`;x.fillText('還沒有範本',W/2,H/2-40);x.font=`500 28px ${FONT}`;x.fillText(`按左下「換範本底圖」上傳${GRID_NAME[grid]}空白範本`,W/2,H/2+20);x.fillText('上傳一次後就會記住',W/2,H/2+64);}return;}
   x.drawImage(tplImg,0,0);x.imageSmoothingQuality='high';
   cells.forEach((c,i)=>{
     const s=slots[i];if(!s)return;
@@ -398,10 +432,13 @@ function render(x,forExport){
       x.lineJoin='round';x.strokeStyle='#101010';x.lineWidth=fs*0.085;
       x.strokeText(s.title,p.x+p.w/2,ty);
       x.fillStyle='#fff';x.fillText(s.title,p.x+p.w/2,ty);}
-    if(s.sub){const fs=fit(x,s.sub,500,Math.round(c.sub.h*0.76),c.sub.maxW);
+    if(s.sub&&!isInline(c)){const fs=fit(x,s.sub,500,Math.round(c.sub.h*0.76),c.sub.maxW);
       x.fillStyle='#1A1A1A';x.fillText(s.sub,c.sub.cx,c.sub.cy+fs*0.04);}
   });
 }
+/* 大格（5 格、3 格最上面那格）橘框下方沒有副標空間：只放主標，不放副標 */
+const isInline=c=>!!c&&c.sub.h<36;
+const limT=i=>isInline(cells[i])?LIMIT_T_BIG:LIMIT_T;   // 大格主標上限 16 字
 let raf=0;function draw(){if(raf)return;raf=requestAnimationFrame(()=>{raf=0;render(ctx,false);});}
 async function loadFonts(){
   const t=slots.map(s=>s.title).join('')||'字',u=slots.map(s=>s.sub).join('')||'字';
@@ -417,11 +454,12 @@ function select(i,k){const changedCard=sel.slot!==i;sel={slot:i,sub:k};
 function renderCards(){
   const box=$('#cards');box.innerHTML='';
   slots.forEach((s,i)=>{
+    const big=isInline(cells[i]);if(big)s.sub='';
     const card=document.createElement('section');card.className='card'+(sel.slot===i?' sel':'');
     card.innerHTML=`<header><h3>第 ${i+1} 格</h3><div class="seg" role="group" aria-label="圖片數量">${[1,2,3].map(n=>`<button type="button" data-n="${n}" aria-pressed="${s.layout===n}">${n} 圖</button>`).join('')}</div></header>
       <div class="pics n${s.layout}"></div>
       <div class="field title"><label for="t${i}">主標（橘框）<span class="cnt"></span></label><input id="t${i}" type="text" autocomplete="off" placeholder="例：CoCo買1送1"></div>
-      <div class="field"><label for="s${i}">副標<span class="cnt"></span></label><input id="s${i}" type="text" autocomplete="off" placeholder="例：開喝富士蘋果新品"></div>`;
+      ${big?'':`<div class="field"><label for="s${i}">副標<span class="cnt"></span></label><input id="s${i}" type="text" autocomplete="off" placeholder="例：開喝富士蘋果新品"></div>`}`;
     card.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{s.layout=+b.dataset.n;if(sel.slot===i)sel.sub=Math.min(sel.sub,s.layout-1);renderCards();draw();changed();});
     const pics=card.querySelector('.pics');
     for(let k=0;k<s.layout;k++){
@@ -451,18 +489,18 @@ function renderCards(){
       o.querySelector('a').addEventListener('click',()=>select(i,0));
       pics.after(o);}
     const ti=card.querySelector(`#t${i}`),si=card.querySelector(`#s${i}`);
-    ti.value=s.title;si.value=s.sub;
+    ti.value=s.title;if(si)si.value=s.sub;
     const upd=()=>{updCount(card,s);refreshStatus();};
     ti.oninput=()=>{s.title=ti.value;upd();ensureFonts();draw();changed();};
-    si.oninput=()=>{s.sub=si.value;upd();ensureFonts();draw();changed();};
-    ti.onfocus=si.onfocus=()=>{if(sel.slot!==i)select(i,0);};
+    if(si)si.oninput=()=>{s.sub=si.value;upd();ensureFonts();draw();changed();};
+    ti.onfocus=()=>{if(sel.slot!==i)select(i,0);};if(si)si.onfocus=ti.onfocus;
     updCount(card,s);box.appendChild(card);
   });
   refreshStatus();updDirty();
 }
 function updCount(card,s){
-  [['.field.title',s.title,LIMIT_T],['.field:not(.title)',s.sub,LIMIT_S]].forEach(([q,v,L])=>{
-    const f=card.querySelector(q),n=countChars(v),bad=n>L;
+  [['.field.title',s.title,limT(slots.indexOf(s))],['.field:not(.title)',s.sub,LIMIT_S]].forEach(([q,v,L])=>{
+    const f=card.querySelector(q);if(!f)return;const n=countChars(v),bad=n>L;
     const c=f.querySelector('.cnt');c.textContent=`${fmtN(n)} / ${L}`;c.classList.toggle('bad',bad);
     f.querySelector('input').classList.toggle('bad',bad);
   });
@@ -488,9 +526,9 @@ async function pasteFromButton(i,k){
 function issues(){
   const bad=[],warn=[];
   slots.forEach((s,i)=>{const n=i+1,a=countChars(s.title),b=countChars(s.sub);
-    if(a>LIMIT_T)bad.push(`第 ${n} 格主標 ${fmtN(a)} 字，超過 ${LIMIT_T} 字`);
+    if(a>limT(i))bad.push(`第 ${n} 格主標 ${fmtN(a)} 字，超過 ${limT(i)} 字`);
     if(b>LIMIT_S)bad.push(`第 ${n} 格副標 ${fmtN(b)} 字，超過 ${LIMIT_S} 字`);
-    if(!s.title.trim()||!s.sub.trim())warn.push(`第 ${n} 格標題未填完`);
+    if(!s.title.trim()||(!s.sub.trim()&&!isInline(cells[i])))warn.push(`第 ${n} 格標題未填完`);
     for(let k=0;k<s.layout;k++)if(!s.pics[k]){warn.push(`第 ${n} 格還有空的圖片位置`);break;}
   });return{bad,warn};
 }
@@ -500,7 +538,7 @@ function refreshStatus(){
   if(!tplImg){$('#btnExport').disabled=true;st.innerHTML='<strong>還沒有範本</strong><div class="result">按下方「換範本底圖」上傳空白範本（白色格子＋標題框的那張圖），上傳一次後就會記住。</div>';return;}
   const{bad,warn}=issues();
   $('#btnExport').disabled=bad.length>0;
-  let h=bad.length?`<strong style="color:var(--bad)">修正以下問題後才能匯出</strong><ul>${bad.map(t=>`<li class="bad">${t}</li>`).join('')}</ul>`:`<span class="okline">字數都在上限內（主標 ${LIMIT_T} 字、副標 ${LIMIT_S} 字），可以匯出</span>`;
+  let h=bad.length?`<strong style="color:var(--bad)">修正以下問題後才能匯出</strong><ul>${bad.map(t=>`<li class="bad">${t}</li>`).join('')}</ul>`:`<span class="okline">字數都在上限內（主標 ${LIMIT_T} 字${cells.some(isInline)?`、大格主標 ${LIMIT_T_BIG} 字`:''}、副標 ${LIMIT_S} 字），可以匯出</span>`;
   if(warn.length)h+=`<ul>${warn.map(t=>`<li class="warn">${t}</li>`).join('')}</ul>`;
   h+=`<div class="result">中文字算 1 字，英文、數字算 0.5 字。範本：${customTpl?'自訂底圖':'預設底圖'}，${cells.length} 格。${lastResult}</div>`;
   st.innerHTML=h;
@@ -611,7 +649,7 @@ async function doExport(){
     }
     if(blob.size>MAX_BYTES){lastResult=`<br>匯出失敗：壓縮後仍有 ${kb(blob.size)}，超過 1MB。`;refreshStatus();toast('檔案壓不到 1MB 以下，請換幾張畫面較單純的圖');return;}
     lastResult=`<br>最近一次匯出：${kb(blob.size)}（${note}）`;refreshStatus();
-    const r=await saveFile(`LINE六格_${stamp()}.png`,blob);
+    const r=await saveFile(`LINE${GRID_NAME[grid]}_${stamp()}.png`,blob);
     const saved=await saveWork({full:c,quiet:true});
     if(r==='saved')toast(`已匯出 ${kb(blob.size)}${saved?'，並存到作品紀錄':''}`);
     else toast(saved?'已取消下載，內容已存到作品紀錄':'已取消下載');
@@ -620,23 +658,25 @@ async function doExport(){
 }
 
 /* ---------- 專案檔 ---------- */
-function buildProject(){return{app:'line-grid-tool',v:1,savedAt:Date.now(),tpl:customTpl?tplSrc:null,slots:snapSlots()};}
+function buildProject(){return{app:'line-grid-tool',v:1,grid,savedAt:Date.now(),tpl:customTpl?tplSrc:null,slots:snapSlots()};}
+const projGrid=p=>GRIDS.includes(p&&p.grid)?p.grid:6;
 function workTitle(p){const s=(p.slots||[]).find(x=>(x.title||'').trim())||{};return (s.title||'').trim()||'未命名';}
 function workCount(p){return (p.slots||[]).filter(s=>(s.title||'').trim()||s.pics.some(Boolean)).length;}
 function validProject(p){return p&&p.app==='line-grid-tool'&&Array.isArray(p.slots);}
 async function loadProject(p,work){
   slots=p.slots.map(s=>({layout:[1,2,3].includes(s.layout)?s.layout:1,title:String(s.title||''),sub:String(s.sub||''),imgUrl:safeUrl(s.imgUrl),pics:[0,1,2].map(k=>{const q=s.pics&&s.pics[k];return q&&typeof q.src==='string'&&q.src.startsWith('data:image/')?{src:q.src,zoom:+q.zoom||1,ox:+q.ox||0,oy:+q.oy||0}:null;})}));
-  const tpl=typeof p.tpl==='string'&&p.tpl.startsWith('data:image/')?p.tpl:null;
-  if(tpl){try{await applyTemplate(tpl,true);DB.set('tpl',tpl);}catch(e){if(HAS_DEFAULT){await applyTemplate(DEFAULT_TEMPLATE,false);DB.del('tpl');}}}
-  else if(HAS_DEFAULT){await applyTemplate(DEFAULT_TEMPLATE,false);DB.del('tpl');}
-  else if(tplImg){while(slots.length<cells.length)slots.push(newSlot());if(slots.length>cells.length)slots.length=cells.length;}
+  const tpl=typeof p.tpl==='string'&&p.tpl.startsWith('data:image/')?p.tpl:null, g=projGrid(p);
+  let done=false;
+  if(tpl){try{grid=g;await applyTemplate(tpl,true);savedTpls[g]=tpl;DB.set(tplKey(g),tpl);done=true;}catch(e){}}
+  if(!done)await useGrid(g);
+  updGridUI();
   sel={slot:0,sub:0};curWork=work||null;dirty=!work;lastResult='';
   renderCards();draw();ensureFonts();persist();updDirty();
 }
 $('#btnProjDown').onclick=async()=>{
   if(!hasContent()){toast('目前這張是空的');return;}
   const p=buildProject();const blob=new Blob([JSON.stringify(p)],{type:'application/json'});
-  const r=await saveFile(`LINE六格專案_${workTitle(p)}_${stamp()}.json`,blob);
+  const r=await saveFile(`LINE${GRID_NAME[grid]}專案_${workTitle(p)}_${stamp()}.json`,blob);
   if(r==='saved')toast('已下載專案檔，可以放到共用雲端硬碟備份');
 };
 $('#btnProjOpen').onclick=()=>{$('#fileProj').value='';$('#fileProj').click();};
@@ -689,7 +729,7 @@ async function keepCurrent(){
 const blobToDataURL=b=>new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(b);});
 async function localSave(p,thumb,reuse){
   const now=Date.now(),id=reuse?reuse.id:'L'+now.toString(36)+Math.random().toString(36).slice(2,6);
-  const meta={id,title:workTitle(p),n:workCount(p),createdAt:reuse?reuse.createdAt:now,updatedAt:now,thumb:await blobToDataURL(thumb)};
+  const meta={id,grid:projGrid(p),title:workTitle(p),n:workCount(p),createdAt:reuse?reuse.createdAt:now,updatedAt:now,thumb:await blobToDataURL(thumb)};
   if(!(await DB.set('work:'+id,p))){const e=new Error('local');e.userMsg='這台電腦的瀏覽器空間不足或被封鎖，請改用「下載專案檔」備份';throw e;}
   localList=[meta,...localList.filter(w=>w.id!==id)].sort((a,b)=>b.updatedAt-a.updatedAt);
   const drop=localList.slice(LOCAL_KEEP);localList=localList.slice(0,LOCAL_KEEP);drop.forEach(w=>DB.del('work:'+w.id));
@@ -715,7 +755,7 @@ async function cloudSave(p,thumb,reuse){
   catch(err){const e=new Error('up');e.userMsg=codeMsg(err)||'上傳失敗，請稍後再試，或先用「下載專案檔」備份';if(pa)assetsNS.delete(pa.id).catch(()=>{});throw e;}
   const now=Date.now(),ref=reuse?dbNS.doc('works/'+reuse.id):dbNS.collection('works').doc();
   const old=reuse?cloudList.find(w=>w.id===reuse.id):null;
-  const body={title:workTitle(p),n:workCount(p),createdAt:reuse&&reuse.createdAt?reuse.createdAt:now,updatedAt:now,
+  const body={grid:projGrid(p),title:workTitle(p),n:workCount(p),createdAt:reuse&&reuse.createdAt?reuse.createdAt:now,updatedAt:now,
     by:(old&&old.by)||myId||null,updatedBy:myId||null,proj:pa.id,thumb:ta.id,size:pa.sizeBytes};
   try{await ref.set(body);}
   catch(err){assetsNS.delete(pa.id).catch(()=>{});assetsNS.delete(ta.id).catch(()=>{});const e=new Error('db');e.userMsg=codeMsg(err)||'存到共用紀錄失敗，請稍後再試';throw e;}
@@ -731,7 +771,7 @@ async function cloudOpen(w){
 }
 async function cloudDownload(w){
   try{const r=await fetch('/_blob/'+w.proj);if(!r.ok)throw 0;const b=await r.blob();
-    const res=await saveFile(`LINE六格專案_${w.title}_${stamp(new Date(w.updatedAt))}.json`,new Blob([b],{type:'application/json'}));
+    const res=await saveFile(`LINE${GRID_NAME[w.grid||6]}專案_${w.title}_${stamp(new Date(w.updatedAt))}.json`,new Blob([b],{type:'application/json'}));
     if(res==='saved')toast('已下載專案檔');}catch(e){toast('下載失敗，請稍後再試');}
 }
 async function cloudDelete(w){
@@ -769,7 +809,7 @@ function renderHist(){
     const isCur=curWork&&curWork.where===histTab&&curWork.id===w.id;
     return `<article class="work${isCur?' cur':''}" data-i="${i}">
       <img src="${esc(src)}" alt="" loading="lazy">
-      <div class="meta"><strong>${esc(w.title||'未命名')}</strong><span>${when(w.updatedAt)}${who?' · '+esc(who):''}${w.n?` · ${w.n} 格`:''}${isCur?' · 編輯中':''}</span></div>
+      <div class="meta"><strong>${esc(w.title||'未命名')}</strong><span>${when(w.updatedAt)}${who?' · '+esc(who):''}${` · ${GRID_NAME[w.grid||6]}版`}${w.n?` · 填了 ${w.n} 格`:''}${isCur?' · 編輯中':''}</span></div>
       <div class="wacts"><button class="btn" data-a="open">開啓</button><button class="btn" data-a="down">專案檔</button>${histTab==='local'||cloudWritable?'<button class="btn warn" data-a="del">刪除</button>':''}</div>
     </article>`;}).join('');
   g.querySelectorAll('.work').forEach(el=>{const w=list[+el.dataset.i];
@@ -777,7 +817,7 @@ function renderHist(){
     el.querySelector('[data-a="down"]').onclick=async()=>{
       if(histTab==='cloud')return cloudDownload(w);
       const p=await DB.get('work:'+w.id);if(!validProject(p)){toast('這筆紀錄讀不到了');return;}
-      const r=await saveFile(`LINE六格專案_${w.title}_${stamp(new Date(w.updatedAt))}.json`,new Blob([JSON.stringify(p)],{type:'application/json'}));if(r==='saved')toast('已下載專案檔');};
+      const r=await saveFile(`LINE${GRID_NAME[w.grid||6]}專案_${w.title}_${stamp(new Date(w.updatedAt))}.json`,new Blob([JSON.stringify(p)],{type:'application/json'}));if(r==='saved')toast('已下載專案檔');};
     const del=el.querySelector('[data-a="del"]');
     if(del){let armed=0;del.onclick=()=>{
       if(Date.now()-armed>3000){armed=Date.now();del.textContent='確定刪除？';setTimeout(()=>{if(del.isConnected)del.textContent='刪除';},3000);return;}
@@ -800,10 +840,14 @@ function parseImport(text){
   }
   return rows;
 }
+/* 貼 3～6 行時，自動用對應格數的版型（該版型要有範本） */
+const importGrid=n=>GRIDS.includes(n)&&n!==grid&&hasTpl(n)?n:grid;
 function previewImport(){
-  const rows=parseImport($('#impText').value).slice(0,cells.length||6);
+  const all=parseImport($('#impText').value),g=importGrid(all.length);
+  const rows=all.slice(0,g===grid?(cells.length||grid):g);
   $('#btnImpGo').disabled=!rows.length;
-  $('#impPrev').innerHTML=rows.map((r,i)=>{const a=countChars(r.title),b=countChars(r.sub),bad=a>LIMIT_T||b>LIMIT_S;
+  const note=g!==grid?`<li>會切換成${GRID_NAME[g]}版型</li>`:(all.length>rows.length?`<li class="bad">目前是${GRID_NAME[grid]}版，只會匯入前 ${rows.length} 行${GRIDS.includes(all.length)&&!hasTpl(all.length)?`（${GRID_NAME[all.length]}版還沒有範本）`:''}</li>`:'');
+  $('#impPrev').innerHTML=note+rows.map((r,i)=>{const a=countChars(r.title),b=countChars(r.sub),big=g===grid?isInline(cells[i]):((g===5||g===3)&&i===0),bad=a>(big?LIMIT_T_BIG:LIMIT_T)||(!big&&b>LIMIT_S);
     return `<li class="${bad?'bad':''}">第 ${i+1} 格：${esc(r.title||'（無主標）')}／${esc(r.sub||'（無副標）')}${r.url?' · 有主圖':''}${bad?' · 字數超過':''}</li>`;}).join('');
 }
 $('#btnImp').onclick=()=>{previewImport();$('#imp').showModal();$('#impText').focus();};
@@ -812,9 +856,12 @@ $('#imp').addEventListener('click',e=>{if(e.target===$('#imp'))$('#imp').close()
 $('#impText').oninput=previewImport;
 $('#btnImpGo').onclick=async()=>{
   if(needTpl())return;
-  const rows=parseImport($('#impText').value).slice(0,cells.length);if(!rows.length)return;
+  const all=parseImport($('#impText').value);if(!all.length)return;
   if(!(await keepCurrent()))return;
-  slots=cells.map((_,i)=>{const r=rows[i];const s=newSlot();if(r){s.title=r.title;s.sub=r.sub;s.imgUrl=r.url;}return s;});
+  const g=importGrid(all.length);if(g!==grid)await useGrid(g);
+  if(needTpl())return;
+  const rows=all.slice(0,cells.length);
+  slots=cells.map((_,i)=>{const r=rows[i];const s=newSlot();if(r){s.title=r.title;s.sub=isInline(cells[i])?'':r.sub;s.imgUrl=r.url;}return s;});
   curWork=null;lastResult='';sel={slot:0,sub:0};
   renderCards();draw();ensureFonts();changed();$('#imp').close();$('#impText').value='';
   const want=slots.map((s,i)=>s.imgUrl?i:-1).filter(i=>i>=0);
@@ -849,11 +896,23 @@ $('#btnNew').onclick=async()=>{
 $('#btnTpl').onclick=()=>{$('#fileTpl').value='';$('#fileTpl').click();};
 $('#fileTpl').onchange=async e=>{const f=e.target.files[0];if(!f)return;
   const src=await blobToDataURL(f);
-  try{const n=await applyTemplate(src,true);DB.set('tpl',src);renderCards();draw();changed();toast(`已換上新範本，偵測到 ${n} 格`);}
+  let n=0;try{n=detect(await loadImage(src)).length;}catch(err){}
+  if(!n){toast('找不到放圖的白色格子和標題橘框，請確認底圖是空白範本');return;}
+  const g=GRIDS.includes(n)?n:grid;
+  if(g!==grid&&!(await leaveCurrentForGrid()))return;
+  try{grid=g;await applyTemplate(src,true);savedTpls[g]=src;DB.set(tplKey(g),src);updGridUI();renderCards();draw();changed();
+    toast(`已換上${GRID_NAME[g]}範本，偵測到 ${n} 格`);}
   catch(err){toast('找不到放圖的白色格子和標題橘框，請確認底圖是空白範本');}
 };
-if(!HAS_DEFAULT)$('#btnTplReset').hidden=true;
-$('#btnTplReset').onclick=async()=>{try{await applyTemplate(DEFAULT_TEMPLATE,false);DB.del('tpl');renderCards();draw();changed();toast('已還原預設範本');}catch(e){}};
+$('#btnTplReset').onclick=async()=>{const d=defTpl(grid);if(!d)return;try{await applyTemplate(d,false);delete savedTpls[grid];DB.del(tplKey(grid));renderCards();draw();changed();toast('已還原預設範本');}catch(e){}};
+document.querySelectorAll('#gridSeg button').forEach(b=>b.onclick=async()=>{
+  const g=+b.dataset.g;if(g===grid)return;
+  if(!(await leaveCurrentForGrid()))return;
+  const had=slots.slice(g).some(s=>s.title.trim()||s.sub.trim()||s.pics.some(Boolean));
+  const ok=await useGrid(g);lastResult='';
+  renderCards();draw();ensureFonts();persist();updDirty();
+  toast(!ok?`已切換到${GRID_NAME[g]}版，請按左下「換範本底圖」上傳${GRID_NAME[g]}空白範本`:`已切換到${GRID_NAME[g]}版${had?'，多出來的格子已隨上一張存到作品紀錄':''}`,4500);
+});
 
 /* 關閉頁面前提醒 */
 window.addEventListener('beforeunload',e=>{if(dirty&&hasContent()){e.preventDefault();e.returnValue='';return '';}});
@@ -861,15 +920,14 @@ window.addEventListener('beforeunload',e=>{if(dirty&&hasContent()){e.preventDefa
 /* ---------- 啓動 ---------- */
 (async()=>{
   await DB.open();
-  const savedTpl=DB.db?await DB.get('tpl'):null;
+  if(DB.db)for(const g of GRIDS){const t=await DB.get(tplKey(g));if(typeof t==='string'&&t)savedTpls[g]=t;}
   const st=DB.db?await DB.get('state'):null;
   localList=(DB.db&&await DB.get('works'))||[];
   if(st&&Array.isArray(st.slots)){
     slots=st.slots.map(s=>({layout:s.layout||1,title:s.title||'',sub:s.sub||'',imgUrl:safeUrl(s.imgUrl),pics:[0,1,2].map(k=>s.pics&&s.pics[k]?{...s.pics[k]}:null)}));
     dirty=st.dirty===undefined?true:!!st.dirty;curWork=st.curWork||null;
   }
-  const startTpl=savedTpl||DEFAULT_TEMPLATE;
-  if(startTpl){try{await applyTemplate(startTpl,!!savedTpl);}catch(e){if(HAS_DEFAULT)await applyTemplate(DEFAULT_TEMPLATE,false);}}
+  await useGrid(st&&GRIDS.includes(st.grid)?st.grid:6);
   renderCards();draw();ensureFonts();updDirty();
   document.fonts&&document.fonts.ready.then(draw);
 
