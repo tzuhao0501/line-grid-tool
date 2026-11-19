@@ -256,8 +256,10 @@ const DB={db:null,
   set(k,v){return new Promise(res=>{try{if(!this.db)return res(false);const tx=this.db.transaction('kv','readwrite');tx.objectStore('kv').put(v,k);tx.oncomplete=()=>res(true);tx.onerror=tx.onabort=()=>res(false);}catch(e){res(false)}})},
   del(k){try{this.db&&this.db.transaction('kv','readwrite').objectStore('kv').delete(k);}catch(e){}}
 };
-const snapSlots=()=>slots.map(s=>({layout:s.layout,title:s.title,sub:s.sub,imgUrl:s.imgUrl||'',pics:s.pics.map(p=>p?{src:p.src,zoom:p.zoom,ox:p.ox,oy:p.oy}:null)}));
-let saveT; function persist(){clearTimeout(saveT);saveT=setTimeout(()=>{DB.set('state',{grid,slots:snapSlots(),dirty,curWork});},400);}
+const snapSlots=(arr=slots)=>arr.map(s=>({layout:s.layout,title:s.title,sub:s.sub,imgUrl:s.imgUrl||'',pics:s.pics.map(p=>p?{src:p.src,zoom:p.zoom,ox:p.ox,oy:p.oy}:null)}));
+let saveT; function persist(){clearTimeout(saveT);saveT=setTimeout(()=>{stash();const all={};
+  for(const g of GRIDS)if(ws[g])all[g]={slots:snapSlots(ws[g].slots),dirty:ws[g].dirty,curWork:ws[g].curWork};
+  DB.set('state',{grid,ws:all,slots:snapSlots(),dirty,curWork});},400);}
 function changed(){dirty=true;updDirty();persist();}
 function hasContent(){return slots.some(s=>s.title.trim()||s.sub.trim()||s.pics.some(Boolean));}
 function updDirty(){const d=$('#dirty');
@@ -381,11 +383,14 @@ async function useGrid(g){
     while(slots.length<g)slots.push(newSlot());if(slots.length>g)slots.length=g;sel={slot:0,sub:0};}
   updGridUI();return ok;
 }
-/* 切換版型前：先把目前這張存起來，之後存檔會另開一筆紀錄 */
-async function leaveCurrentForGrid(){
-  if(!(await keepCurrent()))return false;
-  curWork=null;dirty=hasContent();return true;
-}
+/* 每個版型各自保有自己的編輯內容：切換版型只是換一個工作區，互不影響 */
+const ws={};
+function stash(){ws[grid]={slots,curWork,dirty,sel,lastResult};}
+function restore(g){const w=ws[g];
+  if(w){slots=w.slots;curWork=w.curWork;dirty=w.dirty;sel=w.sel||{slot:0,sub:0};lastResult=w.lastResult||'';}
+  else{slots=[];curWork=null;dirty=false;sel={slot:0,sub:0};lastResult='';}}
+async function switchGrid(g){if(g===grid)return true;stash();restore(g);const ok=await useGrid(g);stash();return ok;}
+const normSlot=s=>({layout:[1,2,3].includes(s.layout)?s.layout:1,title:String(s.title||''),sub:String(s.sub||''),imgUrl:safeUrl(s.imgUrl),pics:[0,1,2].map(k=>{const q=s.pics&&s.pics[k];return q&&typeof q.src==='string'&&q.src.startsWith('data:image/')?{src:q.src,zoom:+q.zoom||1,ox:+q.ox||0,oy:+q.oy||0}:null;})});
 
 /* ---------- 繪製 ---------- */
 function subRects(c,layout){
@@ -664,8 +669,10 @@ function workTitle(p){const s=(p.slots||[]).find(x=>(x.title||'').trim())||{};re
 function workCount(p){return (p.slots||[]).filter(s=>(s.title||'').trim()||s.pics.some(Boolean)).length;}
 function validProject(p){return p&&p.app==='line-grid-tool'&&Array.isArray(p.slots);}
 async function loadProject(p,work){
-  slots=p.slots.map(s=>({layout:[1,2,3].includes(s.layout)?s.layout:1,title:String(s.title||''),sub:String(s.sub||''),imgUrl:safeUrl(s.imgUrl),pics:[0,1,2].map(k=>{const q=s.pics&&s.pics[k];return q&&typeof q.src==='string'&&q.src.startsWith('data:image/')?{src:q.src,zoom:+q.zoom||1,ox:+q.ox||0,oy:+q.oy||0}:null;})}));
-  const tpl=typeof p.tpl==='string'&&p.tpl.startsWith('data:image/')?p.tpl:null, g=projGrid(p);
+  const g=projGrid(p);
+  if(g!==grid){await switchGrid(g);if(!(await keepCurrent()))return false;}   // 只覆蓋同版型的工作區
+  slots=p.slots.map(normSlot);
+  const tpl=typeof p.tpl==='string'&&p.tpl.startsWith('data:image/')?p.tpl:null;
   let done=false;
   if(tpl){try{grid=g;await applyTemplate(tpl,true);savedTpls[g]=tpl;DB.set(tplKey(g),tpl);done=true;}catch(e){}}
   if(!done)await useGrid(g);
@@ -684,7 +691,7 @@ $('#fileProj').onchange=async e=>{const f=e.target.files[0];if(!f)return;
   let p;try{p=JSON.parse(await f.text());}catch(err){toast('讀不到這個檔案，請確認是本工具下載的專案檔');return;}
   if(!validProject(p)){toast('這不是本工具的專案檔');return;}
   if(!(await keepCurrent()))return;
-  await loadProject(p,null);$('#hist').close();toast(`已開啓專案檔「${workTitle(p)}」`);
+  if(await loadProject(p,null)===false)return;$('#hist').close();toast(`已開啓專案檔「${workTitle(p)}」`);
 };
 
 /* ---------- 作品紀錄 ---------- */
@@ -738,7 +745,7 @@ async function localSave(p,thumb,reuse){
   if($('#hist').open)renderHist();
 }
 async function localOpen(w){const p=await DB.get('work:'+w.id);if(!validProject(p)){toast('這筆紀錄讀不到了');return;}
-  if(!(await keepCurrent()))return;await loadProject(p,{id:w.id,where:'local',createdAt:w.createdAt});$('#hist').close();toast(`已開啓「${w.title}」，可以繼續修改`);}
+  if(!(await keepCurrent()))return;if(await loadProject(p,{id:w.id,where:'local',createdAt:w.createdAt})===false)return;$('#hist').close();toast(`已開啓「${w.title}」，可以繼續修改`);}
 async function localDelete(w){DB.del('work:'+w.id);localList=localList.filter(x=>x.id!==w.id);await DB.set('works',localList);
   if(curWork&&curWork.where==='local'&&curWork.id===w.id){curWork=null;dirty=hasContent();updDirty();persist();}renderHist();}
 
@@ -765,7 +772,7 @@ async function cloudSave(p,thumb,reuse){
 async function cloudOpen(w){
   try{const r=await fetch('/_blob/'+w.proj);if(!r.ok)throw 0;const p=await r.json();if(!validProject(p))throw 0;
     if(!(await keepCurrent()))return;
-    const mine=cloudWritable;await loadProject(p,mine?{id:w.id,where:'cloud',createdAt:w.createdAt}:null);
+    const mine=cloudWritable;if(await loadProject(p,mine?{id:w.id,where:'cloud',createdAt:w.createdAt}:null)===false)return;
     $('#hist').close();toast(mine?`已開啓「${w.title}」，修改後存檔會更新這筆紀錄`:`已開啓「${w.title}」，修改後會另存在這台電腦`,4500);
   }catch(e){toast('這筆紀錄讀不到了，可能已被刪除');}
 }
@@ -857,8 +864,8 @@ $('#impText').oninput=previewImport;
 $('#btnImpGo').onclick=async()=>{
   if(needTpl())return;
   const all=parseImport($('#impText').value);if(!all.length)return;
+  const g=importGrid(all.length);if(g!==grid)await switchGrid(g);
   if(!(await keepCurrent()))return;
-  const g=importGrid(all.length);if(g!==grid)await useGrid(g);
   if(needTpl())return;
   const rows=all.slice(0,cells.length);
   slots=cells.map((_,i)=>{const r=rows[i];const s=newSlot();if(r){s.title=r.title;s.sub=isInline(cells[i])?'':r.sub;s.imgUrl=r.url;}return s;});
@@ -899,7 +906,7 @@ $('#fileTpl').onchange=async e=>{const f=e.target.files[0];if(!f)return;
   let n=0;try{n=detect(await loadImage(src)).length;}catch(err){}
   if(!n){toast('找不到放圖的白色格子和標題橘框，請確認底圖是空白範本');return;}
   const g=GRIDS.includes(n)?n:grid;
-  if(g!==grid&&!(await leaveCurrentForGrid()))return;
+  if(g!==grid){stash();restore(g);}
   try{grid=g;await applyTemplate(src,true);savedTpls[g]=src;DB.set(tplKey(g),src);updGridUI();renderCards();draw();changed();
     toast(`已換上${GRID_NAME[g]}範本，偵測到 ${n} 格`);}
   catch(err){toast('找不到放圖的白色格子和標題橘框，請確認底圖是空白範本');}
@@ -907,11 +914,9 @@ $('#fileTpl').onchange=async e=>{const f=e.target.files[0];if(!f)return;
 $('#btnTplReset').onclick=async()=>{const d=defTpl(grid);if(!d)return;try{await applyTemplate(d,false);delete savedTpls[grid];DB.del(tplKey(grid));renderCards();draw();changed();toast('已還原預設範本');}catch(e){}};
 document.querySelectorAll('#gridSeg button').forEach(b=>b.onclick=async()=>{
   const g=+b.dataset.g;if(g===grid)return;
-  if(!(await leaveCurrentForGrid()))return;
-  const had=slots.slice(g).some(s=>s.title.trim()||s.sub.trim()||s.pics.some(Boolean));
-  const ok=await useGrid(g);lastResult='';
+  const ok=await switchGrid(g);
   renderCards();draw();ensureFonts();persist();updDirty();
-  toast(!ok?`已切換到${GRID_NAME[g]}版，請按左下「換範本底圖」上傳${GRID_NAME[g]}空白範本`:`已切換到${GRID_NAME[g]}版${had?'，多出來的格子已隨上一張存到作品紀錄':''}`,4500);
+  toast(!ok?`已切換到${GRID_NAME[g]}版，請按左下「換範本底圖」上傳${GRID_NAME[g]}空白範本`:`已切換到${GRID_NAME[g]}版（各版型內容分開保存，互不影響）`,4500);
 });
 
 /* 關閉頁面前提醒 */
@@ -923,11 +928,14 @@ window.addEventListener('beforeunload',e=>{if(dirty&&hasContent()){e.preventDefa
   if(DB.db)for(const g of GRIDS){const t=await DB.get(tplKey(g));if(typeof t==='string'&&t)savedTpls[g]=t;}
   const st=DB.db?await DB.get('state'):null;
   localList=(DB.db&&await DB.get('works'))||[];
-  if(st&&Array.isArray(st.slots)){
-    slots=st.slots.map(s=>({layout:s.layout||1,title:s.title||'',sub:s.sub||'',imgUrl:safeUrl(s.imgUrl),pics:[0,1,2].map(k=>s.pics&&s.pics[k]?{...s.pics[k]}:null)}));
-    dirty=st.dirty===undefined?true:!!st.dirty;curWork=st.curWork||null;
+  const g0=st&&GRIDS.includes(st.grid)?st.grid:6;
+  if(st&&st.ws&&typeof st.ws==='object'){
+    for(const g of GRIDS){const w=st.ws[g];if(w&&Array.isArray(w.slots))ws[g]={slots:w.slots.map(normSlot),dirty:w.dirty===undefined?true:!!w.dirty,curWork:w.curWork||null,sel:{slot:0,sub:0},lastResult:''};}
+  }else if(st&&Array.isArray(st.slots)){   // 舊版只有一份內容
+    ws[g0]={slots:st.slots.map(normSlot),dirty:st.dirty===undefined?true:!!st.dirty,curWork:st.curWork||null,sel:{slot:0,sub:0},lastResult:''};
   }
-  await useGrid(st&&GRIDS.includes(st.grid)?st.grid:6);
+  grid=g0;restore(g0);
+  await useGrid(g0);stash();
   renderCards();draw();ensureFonts();updDirty();
   document.fonts&&document.fonts.ready.then(draw);
 
